@@ -9,7 +9,7 @@ library(ggplot2)
 library(sf)
 
 #### Reading in the data
-Data <- readRDS("dat.RDS")
+# Data <- readRDS("dat.RDS")
 Data <- readRDS("dat_new.RDS") # with the data i genrated myself
 
 if(TRUE %in% grepl("area.x", names(Data))) Data$area = Data$area.x
@@ -111,11 +111,6 @@ WGMIXFISH_splist <- c("ANF","ANK","BLL","CAA","COD","COE","DAB","FLE","GUG","GUR
   Data %>% filter(RC %in% names(no_info)) %>% group_by(RC,  FANGSTART_FAO) %>% summarize(n=n()) %>% View()
   Data %>% filter(FANGSTART_FAO %in% "LAH") %>% group_by(RC) %>% summarize(n=n(), catch = sum(RUNDVEKT, na.rm=T)) 
   
-  Data1 <- Data %>% filter(RC %in% names(to_look)) %>% group_by(RC) %>% mutate(STØRSTE_LENGDE = unique(STØRSTE_LENGDE)[!is.na(unique(STØRSTE_LENGDE))])
-  Data2 <- Data %>% filter(! RC %in% names(to_look))
-  
-  Data <- rbind(Data1, Data2)
-
 ## Testing if there is any NAs in the above cleaned data. If yes, need further cleaning
   apply(Data %>% dplyr::select(Species, Year, Quarter, IntercatchMetierTag, VesselLenthCategory, Area), 2, function(x) sum(is.na(x)))
   View(Data[is.na(Data[,c('VesselLenthCategory')]),c('STØRSTE_LENGDE', 'IntercatchMetierTag', 'VesselLenthCategory', 'BRUTTOTONNASJE', 'MOTORKRAFT')])
@@ -142,7 +137,7 @@ Catch$Quarter <- paste0("Q", Catch$Quarter)
 
 
 #write.csv(Catch, file="output/Catch_new.csv")
-write.csv(Catch, file="output/Catch_corrected.csv")
+write.csv(Catch, file="output/Norway_catch.csv")
 
 
 ## Now generating the Data file
@@ -161,7 +156,7 @@ Effort$Quarter <- paste("Q", Effort$Quarter, sep="")
 Effort <- Effort[-which(Effort$Quarter == "QNA"),]
 
 #write.csv(Effort, file="output/Effort_new.csv")
-write.csv(Effort, file="output/Effort_corrected.csv")
+write.csv(Effort, file="output/Norway_effort.csv")
 
 
 ggplot(data = Effort %>% group_by(IntercatchMetierTag, Year) %>% summarize(KWH = sum(KWdays, na.rm=T)*24/1000), aes(x=Year, y=KWH)) + 

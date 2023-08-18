@@ -10,7 +10,7 @@ library(sf)
 
 #### Reading in the data
 # Data <- readRDS("dat.RDS")
-Data <- readRDS("dat_new.RDS") # with the data i genrated myself
+Data <- readRDS("dat_new.RDS") # with the data i generated myself
 
 if(TRUE %in% grepl("area.x", names(Data))) Data$area = Data$area.x
 

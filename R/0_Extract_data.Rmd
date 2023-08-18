@@ -11,7 +11,7 @@ It only works for 2015-present data as a consequence.
 
 Here are the general steps of the data processing: 
 1. Because the logbook is only for NORWEGIAN vessels, we filter out all NON-NORWEGIAN sales note.
-2. Because the logbook requirement was to vessels >15m until end of 2020, >11m from July 1st 2022, >10m from July 1st 2023, >8m from January 1st 2025, we filter these out too in order to efficiently link the two data soruces
+2. Because the logbook requirement was to vessels >15m until end of 2020, >11m from July 1st 2022, >10m from July 1st 2023, >8m from January 1st 2025, we filter these out too in order to efficiently link the two data sources. But there are the Skagerrak regions before with >12m requirement
 3. There are some cases where the sales note does not record information in radiocallsignal. In that case, the link is made to the logbook via the registration number
 4. then we proceed with the data processing while having to make the assumptions below.
 
@@ -163,19 +163,19 @@ verdi <- read.csv(file_verdi,
   fangst_verdi$LDAT <- as.POSIXct(as.character(fangst_verdi$Landingsdato),format="%d.%m.%Y", tz="UTC")
 
 ## Filter out ALL non-norwegian vessels
-  fangst_verdi <- fangst_verdi[which(fangst_verdi$Fartøynasjonalitet == "NORGE"),]
+  fangst_verdi <- fangst_verdi[which(fangst_verdi$Fartøynasjonalitet..kode. == "NOR"),]
 
 ## Filter out based on the size of the vessel and the logbook requirement rule change
-if (year < 2021) fangst_verdi <- fangst_verdi %>% filter(Største.lengde >= 15)
-if (year >= 2021) {
-  sel1 <- which(fangst_verdi$LDAT >= "2021-01-01 UTC" & fangst_verdi$LDAT < "2023-07-01 UTC") 
-  sel2 <- which(fangst_verdi$LDAT >= "2023-07-01 UTC" & fangst_verdi$LDAT < "2025-01-01 UTC")
-  fangst_verdi1 <- NULL
-  fangst_verdi2 <- NULL
-  if (length(sel1) >0) fangst_verdi1 <- fangst_verdi[sel1, ] %>% filter(Største.lengde >= 11)
-  if (length(sel2) >0) fangst_verdi2 <- fangst_verdi[sel2, ] %>% filter(Største.lengde >= 10)
-  fangst_verdi <- rbind(fangst_verdi1, fangst_verdi2)
-}
+# if (year < 2021) fangst_verdi <- fangst_verdi %>% filter(Største.lengde >= 15)
+# if (year >= 2021) {
+#   sel1 <- which(fangst_verdi$LDAT >= "2021-01-01 UTC" & fangst_verdi$LDAT < "2023-07-01 UTC") 
+#   sel2 <- which(fangst_verdi$LDAT >= "2023-07-01 UTC" & fangst_verdi$LDAT < "2025-01-01 UTC")
+#   fangst_verdi1 <- NULL
+#   fangst_verdi2 <- NULL
+#   if (length(sel1) >0) fangst_verdi1 <- fangst_verdi[sel1, ] %>% filter(Største.lengde >= 11)
+#   if (length(sel2) >0) fangst_verdi2 <- fangst_verdi[sel2, ] %>% filter(Største.lengde >= 10)
+#   fangst_verdi <- rbind(fangst_verdi1, fangst_verdi2)
+# }
 
 ## If the radiocall signal is missing, we can find the missing info in the logbook from the registration number
   missingRC <- unique(fangst_verdi[which(fangst_verdi$Radiokallesignal..seddel.==""),'Registreringsmerke..seddel.'])

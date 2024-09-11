@@ -1,0 +1,344 @@
+---
+title: "Linking ERS to VMS"
+author: "Kotaro Ono"
+format: html
+editor: visual
+---
+
+This is a test code to try linking the ERS and VMS data that are accessible from the fiskeridirektoradet website
+
+## Prepping the data
+
+### Loading the packages
+
+```{r}
+library(vmstools)
+library(chron)
+library(plyr)
+library(lubridate)
+library(data.table)
+library(purrr)
+library(stringr)
+library(dplyr)
+library(sp)
+library(sf)
+library(survival) # neardate
+library(readr) # read_delim
+library(openxlsx) # read.xlsx
+library(tidyr)
+library(ggplot2)
+# library(threadr) # percentage_difference
+
+```
+
+### Get the logbook data and the vms data
+
+```{r}
+Sys.setlocale("LC_COLLATE", "English_United States.utf8")
+Sys.setlocale("LC_CTYPE", "English_United States.utf8")
+Sys.setlocale("LC_MONETARY", "English_United States.utf8")
+Sys.setlocale("LC_TIME", "English_United States.utf8")
+
+d1 <- read.csv(file="C:/Users/a23092/Dropbox/IMR_projects/ERS_data/elektronisk-rapportering-ers-2023-fangstmelding-dca.csv",
+               sep=";", header=TRUE, dec=",", na.strings = c("NA", ""))
+dep <- read.csv(file="C:/Users/a23092/Dropbox/IMR_projects/ERS_data/elektronisk-rapportering-ers-2023-avgangsmelding-dep.csv",
+               sep=";", header=TRUE, dec=",", na.strings = c("NA", ""))
+vms <- read.csv(file="C:/Users/a23092/Dropbox/IMR_projects/ERS_data/2023-VMS.csv",
+               sep=";", header=TRUE, dec=",", na.strings = c("NA", ""), nrows=1000000)
+
+```
+
+### Re-format logbook data to resemble eflalo2
+
+```{r}
+
+d1$VE_REF <- d1$Radiokallesignal..ERS.
+d1$VE_FLT <- NA
+d1$VE_COU <- "NO"
+d1$VE_LEN <- d1$Fartøylengde
+d1$VE_KW <- d1$Motorkraft/1.36
+d1$VE_TON <- d1$Bruttotonnasje.1969
+
+d1$FT_REF <- NA
+d1$FT_DCOU <- "NO"
+d1$FT_DHAR <- NA
+
+d1$STARTTIDSPUNKT <- as.POSIXct(d1$Starttidspunkt,format="%d.%m.%Y %H:%M:%S")
+d1$STOPPTIDSPUNKT <- as.POSIXct(d1$Stopptidspunkt,format="%d.%m.%Y %H:%M:%S")
+
+# the following fields should contain FT info, but I will use them to store haul (incl. catch) data
+
+d1$FT_DDAT <- lubridate::as_date(d1$STARTTIDSPUNKT)
+d1$FT_DDAT <- format(d1$FT_DDAT, "%d/%m/%Y")
+
+d1$FT_DTIME <- times(format(d1$STARTTIDSPUNKT, "%H:%M:%S"))
+
+d1$FT_LCOU <- "NO"
+
+d1$FT_LHAR <- NA
+
+d1$FT_LDAT <- lubridate::as_date(d1$STOPPTIDSPUNKT)
+d1$FT_LDAT <- format(d1$FT_LDAT, "%d/%m/%Y")
+
+d1$FT_LTIME <- times(format(d1$STOPPTIDSPUNKT, "%H:%M:%S"))
+
+d1$FT_REF <- paste(d1$VE_REF,year(d1$STARTTIDSPUNKT), month(d1$STARTTIDSPUNKT),
+                   day(d1$STARTTIDSPUNKT), hour(d1$STARTTIDSPUNKT),
+                   minute(d1$STARTTIDSPUNKT),as.character(d1$Varighet),
+                   sep = "-")
+
+# approximate LE data follows
+
+d1$LE_ID <- row.names(d1)
+d1$LE_CDAT <- lubridate::as_date(d1$STARTTIDSPUNKT)
+d1$LE_STIME <- times(format(d1$STARTTIDSPUNKT, "%H:%M:%S"))
+d1$LE_ETIME <- times(format(d1$STOPPTIDSPUNKT, "%H:%M:%S"))
+d1$LE_SLAT <- as.numeric(d1$Startposisjon.bredde)
+d1$LE_SLON <- as.numeric(d1$Startposisjon.lengde)
+d1$LE_ELAT <- as.numeric(d1$Stopposisjon.bredde)
+d1$LE_ELON <- as.numeric(d1$Stopposisjon.lengde)
+d1$LE_GEAR <- d1$Redskap.FAO..kode.
+d1$LE_MSZ <- d1$Redskap.maskevidde
+d1$LE_RECT <- d1$Områdegruppering.start..kode. # or should it be the rectangle at the end? or should i over the pol?
+d1$LE_DIV <- NA
+d1$LE_MET <- NA
+d1$LE_KG <- d1$Rundvekt
+
+head(d1)
+```
+
+### Quick and dirty checks of the work above
+
+```{r}
+# time period
+min(d1$STARTTIDSPUNKT, na.rm=TRUE); max(d1$STARTTIDSPUNKT, na.rm=TRUE)
+# How many NAs in the date field?
+length(sum(is.na(d1$STARTTIDSPUNKT)))/dim(d1)[1]
+```
+
+We keep only the DCA so we need to have the gear info. If such info is missing, it is likely that they not fishing
+
+```{r}
+d1 <- d1 %>% filter(!is.na(LE_GEAR))
+```
+
+### Fill out metier field
+
+#### Transcode gear
+
+```{r}
+d2 <- d1
+
+idx1<-which(d2$`Redskap.FAO..kode.`=="GEN")
+d2$LE_GEAR[idx1]<-"GNS"
+
+idx1<-which(d2$`Redskap.FAO..kode.`=="SND")   # I assume this is a typo
+d2$LE_GEAR[idx1]<-"SDN"
+
+idx2<-which(d2$`Redskap.FAO..kode.`=="LL")
+d2$LE_GEAR[idx2]<-"LLS"
+
+idx3<-which(d2$`Redskap.FAO..kode.`%in%c("PS1", "PS2"))
+d2$LE_GEAR[idx3]<-"PS"
+
+idx4<-which(d2$`Redskap.FAO..kode.`%in%c("OTS", "TB", "TBN", "TBS"))
+d2$LE_GEAR[idx4]<-"OTB"
+
+idx5<-which(d2$`Redskap.FAO..kode.`%in%c("TM", "TMS"))
+d2$LE_GEAR[idx5]<-"OTM"
+
+idx5<-which(d2$`Redskap.FAO..kode.`%in%c("HAR", "HMP", NA))   # some gears not existing in the RCG gear list goes to "miscellaneous"
+d2$LE_GEAR[idx5]<-"MIS"
+
+
+### Species FAO code that won't match 
+  d2$FAO_species <- d2$Art.FAO..kode.
+  idx1 <- which(d2$Art.FAO..kode. %in% c("CXI", "ISC", "LCW", "KCD", "FPA", "KIF", "PHR", "MTP", "GDG", "FNO", "UQT", "MVB", "BWD", "WIC", "ITV", "MIW", "TVF", "SEH", "JCM", "LVU", "TVK", "SEC", "CAA"))
+  d2$FAO_species[idx1] <- "MIS"
+
+### Changing the area code specification - required for later use to match with the RCG lists
+  d2$LE_RECT <- str_replace_all(d2$LE_RECT, "_", ".")
+  d2$LE_RECT <- tolower(d2$LE_RECT)
+
+
+```
+
+#### Use the RCG's code to merge information on metier, area, etc
+
+```{r}
+
+### Create input data
+  input.data <- data.table(Country = d2$VE_COU,
+                           year = year(as.POSIXct(d2$FT_DDAT[1],format="%d/%m/%Y")),
+                           vessel_id = d2$VE_REF,
+                           vessel_length = d2$VE_LEN,
+                           trip_id = d2$FT_REF,
+                           haul_id = d2$LE_ID,
+                           fishing_day = as.character(d2$LE_CDAT),
+                           area = as.character(NA),
+                           ices_rectangle = d2$LE_RECT,
+                           gear = d2$LE_GEAR,
+                           gear_FR = as.character(NA),
+                           mesh = d2$LE_MSZ,
+                           selection = "0",
+                           registered_target_assemblage = as.character(NA),
+                           FAO_species = d2$Art.FAO..kode.,
+                           metier_level_6 = as.character(NA),
+                           measure =as.character(NA),
+                           KG = d2$Rundvekt,
+                           EUR = as.numeric(NA))
+  
+  validateInputDataFormat(input.data) # the input needs to be a data.table!
+
+### Load reference lists
+  url <- "https://github.com/ices-eg/RCGs/raw/master/Metiers/Reference_lists/AreaRegionLookup.csv"
+  area.list <- loadAreaList(url)
+  area.list$area <- tolower(area.list$area)
+  url <- "https://github.com/ices-eg/RCGs/raw/master/Metiers/Reference_lists/Metier%20Subgroup%20Species.xlsx"
+  url <- "https://github.com/ices-eg/RCGs/raw/master/Metiers/Reference_lists/old_reference_lists/Metier%20Subgroup%20Species%202020.xlsx"
+  species.list <- loadSpeciesList(url)
+  url <- "https://github.com/ices-eg/RCGs/raw/master/Metiers/Reference_lists/RDB_ISSG_Metier_list.csv"
+  metier.list <- loadMetierList(url)
+  url <- "https://github.com/ices-eg/RCGs/raw/master/Metiers/Reference_lists/Code-ERSGearType-v1.1.xlsx"
+  gear.list <- loadGearList(url)
+  assemblage.list <- unique(c(species.list$species_group, species.list$dws_group))
+  assemblage.list <- assemblage.list[!is.na(assemblage.list)]
+  rm(url)
+
+### Input data codes validation
+  validateInputDataCodes(input.data, gear.list, area.list, species.list)
+
+### Checking where these data come from:
+  ggplot(world) + geom_sf() + geom_point(data=d2, aes(x= LE_SLON, LE_SLAT), col="red")
+
+### Assign RCG names to the input data
+
+#### first approach: Get FAO area code for each fishing operation (use centroid)
+  # lons <- d2 %>% select(LE_SLON, LE_ELON) %>% rowMeans()
+  # lats <- d2 %>% select(LE_SLAT, LE_ELAT) %>% rowMeans()
+  # d2sp <- st_as_sf(data.frame(lon=lons, lat=lats), coords = c("lon", "lat")) %>% st_crs(4326)
+  # ### Get FAO area code
+  # input.data <- input.data %>%
+  #   ExtractFaoCode(d2sp)   # this code does not work missing the function
+
+#### Second approach: using the value in the data if existing (either start or stop)
+  input.data$area <- input.data$ices_rectangle
+
+### Merge by area
+  input.data <- merge(input.data, area.list, all.x = T, by = "area")
+  input.data$MONTH = month(as.POSIXct(d2$FT_DDAT,format="%d/%m/%Y"))
+  input.data$DAY = day(as.POSIXct(d2$FT_DDAT,format="%d/%m/%Y"))
+  input.data$RC = d2$VE_REF
+
+
+  table(is.na(input.data$area))
+```
+
+There are quite a few points that are "off" the zone of interest. Maybe there is a possibility to fix these points but right now, we will just filter them out.
+
+```{r}
+input.data <- input.data %>% filter(!is.na(area))
+d2 <- d2 %>% filter(!is.na(LE_RECT))
+```
+
+### Fill in target species information to determine the metier information
+
+One option (the most correct) would be to link the DEP and the DCA to extract this information. But this is a bit complicated. Moreover the main reason to merge these two files is to extract the target species info.
+
+Another option that MANY people opt for is to use the species that is most caught in a fishing event and assume it as the main target (which might not be the same as the initial plan and target BUT things often does not go as planned...)
+
+```{r}
+
+# the most correct option to merge dep and d1 - but there are several issues in the data 
+  has_problems <- function(){
+    depdata <- dep
+    depdata$Startdato <- as.POSIXct(depdata$Avgangsdato,format="%d.%m.%Y")
+    d2$Startdato <- as.POSIXct(d2$Startdato,format="%d.%m.%Y")
+    test <- d2 %>% left_join(depdata, by=c("Radiokallesignal..ERS.", "Startdato", "Startposisjon.bredde", "Startposisjon.lengde"), relationship="many-to-one")
+   ## some visualization of the problem : there are some many-to-many matching... 
+      fake1 <- d2 %>% filter(Radiokallesignal..ERS. == "LKZV", Startdato == "2024-03-14 CET", Startposisjon.bredde == 58.05, Startposisjon.lengde == 8.1) 
+      fake1 <- depdata %>% filter(Radiokallesignal..ERS. == "LKZV", Startdato == "2024-03-14 CET", Startposisjon.bredde == 58.05, Startposisjon.lengde == 8.1)
+  }
+
+# The second option and the easiest is to just take the largest catch in a fishing event as the target species
+  d2 <- d2 %>% group_by(Radiokallesignal..ERS., Startdato, Startposisjon.bredde, Startposisjon.lengde) %>% 
+    mutate(Target_species = FAO_species[which.max(Rundvekt)[1]]) 
+  
+# Now using the above in the eflalo output
+  input.data$Target_species <- d2$Target_species
+  input.data <- input.data %>%
+    mutate(registered_target_assemblage=species.list$species_group[match(Target_species,species.list$FAO_species)])
+  
+# Assign species category to the input data
+  input.data <- merge(input.data, species.list, all.x = T, by = "FAO_species")
+
+# Assign gear group and re-coded gear name to the input data
+  input.data <- merge(input.data, gear.list, all.x = T, by.x = "gear", by.y = "gear_code")
+
+  input.data$seq_dom_group<-NA
+  input.data$selection_type<-NA
+  input.data$selection_mesh<-NA
+
+# Now creating the metier categorization  
+  input.data[,c("metier_level_6","metier_level_5"):=pmap_dfr(list(RCG,
+                                                                  year,
+                                                                  gear_level6, 
+                                                                  registered_target_assemblage,
+                                                                  seq_dom_group, 
+                                                                  mesh, 
+                                                                  selection_type,
+                                                                  selection_mesh
+  ), getMetier)]
+
+
+length(which(input.data$metier_level_6=="MIS_MIS_0_0_0"))/dim(input.data)[1]
+```
+
+
+### Re-format the VMS data to resemble tacsat & final edit of the ERS data for the catch data to resemble eflalo
+
+```{r}
+
+vms$VE_COU <- "NO"
+vms$VE_REF <- vms$Radiokallesignal
+vms$SI_LATI <- as.numeric(vms$Breddegrad)
+vms$SI_LONG <- as.numeric(vms$Lengdegrad)
+vms$Date <- as.POSIXct(vms$Tidspunkt..UTC.,format="%d.%m.%Y %H:%M:%S")
+vms$SI_DATE <- format(vms$Date, "%d/%m/%Y")
+vms$SI_TIME <- format(vms$Date, "%H:%M:%S")
+vms$SI_SP <- vms$Fart
+vms$SI_HE <- vms$Kurs
+
+eflalo <- d2 %>% left_join(input.data, by = c("LE_ID"="haul_id"))  
+colnames(eflalo)[grep(".x", colnames(eflalo), fixed=TRUE)] <- str_sub(colnames(eflalo)[grep(".x", colnames(eflalo), fixed=TRUE)], end=-3) 
+colnames(eflalo)[grep(".y", colnames(eflalo), fixed=TRUE)] <- str_sub(colnames(eflalo)[grep(".y", colnames(eflalo), fixed=TRUE)], end=-3) 
+eflalo <- eflalo %>% pivot_wider(names_from = "FAO_species", values_from = "Rundvekt", names_prefix = "LE_KG_") 
+eflalo[, grep("LE_KG_", colnames(eflalo))] <- apply(eflalo[, grep("LE_KG_", colnames(eflalo))], 2, function(x) replace_na(x, 0))
+
+```
+
+
+### Checking the format
+```{r}
+eflalo <- formatEflalo(eflalo)
+tacsat <- formatTacsat(vms)
+summarizeTacsat(tacsat)
+summarizeEflalo(eflalo)
+```
+
+### Now merging the two datasets (had to modify the code as there was an issue)
+```{r}
+source("Functions/mergeEflalo2Tacsat_modif.R")
+tacsatp <- mergeEflalo2Tacsat_modif(eflalo,vms)
+```
+
+### Some testing
+```{r}
+#Copy the gear type from eflalo to tacsat using match.
+tacsatp$LE_GEAR <- eflalo$LE_GEAR[match(tacsatp$FT_REF,eflalo$FT_REF)]
+
+#Let's see if it worked correctly
+subset(tacsatp,FT_REF == "LCLP-2023-1-8-19-11-347")
+subset(eflalo,FT_REF == "LCLP-2023-1-8-19-11-347")
+```
+

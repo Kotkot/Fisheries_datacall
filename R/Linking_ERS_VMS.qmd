@@ -3,6 +3,7 @@ title: "Linking ERS to VMS"
 author: "Kotaro Ono"
 format: html
 editor: visual
+server: shiny
 ---
 
 This is a test code to try linking the ERS and VMS data that are accessible from the fiskeridirektoradet website
@@ -12,6 +13,9 @@ This is a test code to try linking the ERS and VMS data that are accessible from
 ### Loading the packages
 
 ```{r}
+#| warning: false
+#| echo: false
+
 library(vmstools)
 library(chron)
 library(plyr)
@@ -27,13 +31,30 @@ library(readr) # read_delim
 library(openxlsx) # read.xlsx
 library(tidyr)
 library(ggplot2)
+library(sf)
+
+fun_dir <- list.files(paste0(getwd(), "/Functions/"), full.names = TRUE)
+for (i in fun_dir) source(i) 
 # library(threadr) # percentage_difference
 
+```
+
+### Loading the underlying map 
+```{r}
+#| warning: false
+#| echo: false
+
+new_proj <- 3035
+world <- st_read("../../../Shapefiles/ne_10m_land.shp")
+world <- world %>% st_make_valid()
 ```
 
 ### Get the logbook data and the vms data
 
 ```{r}
+#| warning: false
+#| echo: false
+
 Sys.setlocale("LC_COLLATE", "English_United States.utf8")
 Sys.setlocale("LC_CTYPE", "English_United States.utf8")
 Sys.setlocale("LC_MONETARY", "English_United States.utf8")
@@ -51,6 +72,9 @@ vms <- read.csv(file="C:/Users/a23092/Dropbox/IMR_projects/ERS_data/2023-VMS.csv
 ### Re-format logbook data to resemble eflalo2
 
 ```{r}
+#| warning: false
+#| echo: false
+#| output: false
 
 d1$VE_REF <- d1$Radiokallesignal..ERS.
 d1$VE_FLT <- NA
@@ -127,6 +151,10 @@ d1 <- d1 %>% filter(!is.na(LE_GEAR))
 #### Transcode gear
 
 ```{r}
+#| warning: false
+#| echo: false
+#| output: false
+
 d2 <- d1
 
 idx1<-which(d2$`Redskap.FAO..kode.`=="GEN")
@@ -151,7 +179,7 @@ idx5<-which(d2$`Redskap.FAO..kode.`%in%c("HAR", "HMP", NA))   # some gears not e
 d2$LE_GEAR[idx5]<-"MIS"
 
 
-### Species FAO code that won't match 
+### Species FAO code that won't match (this needs to be dealt with later on...)
   d2$FAO_species <- d2$Art.FAO..kode.
   idx1 <- which(d2$Art.FAO..kode. %in% c("CXI", "ISC", "LCW", "KCD", "FPA", "KIF", "PHR", "MTP", "GDG", "FNO", "UQT", "MVB", "BWD", "WIC", "ITV", "MIW", "TVF", "SEH", "JCM", "LVU", "TVK", "SEC", "CAA"))
   d2$FAO_species[idx1] <- "MIS"
@@ -166,6 +194,9 @@ d2$LE_GEAR[idx5]<-"MIS"
 #### Use the RCG's code to merge information on metier, area, etc
 
 ```{r}
+#| warning: false
+#| echo: false
+#| output: true
 
 ### Create input data
   input.data <- data.table(Country = d2$VE_COU,
@@ -248,6 +279,8 @@ One option (the most correct) would be to link the DEP and the DCA to extract th
 Another option that MANY people opt for is to use the species that is most caught in a fishing event and assume it as the main target (which might not be the same as the initial plan and target BUT things often does not go as planned...)
 
 ```{r}
+#| warning: false
+#| echo: false
 
 # the most correct option to merge dep and d1 - but there are several issues in the data 
   has_problems <- function(){
@@ -294,10 +327,11 @@ Another option that MANY people opt for is to use the species that is most caugh
 length(which(input.data$metier_level_6=="MIS_MIS_0_0_0"))/dim(input.data)[1]
 ```
 
-
 ### Re-format the VMS data to resemble tacsat & final edit of the ERS data for the catch data to resemble eflalo
 
 ```{r}
+#| warning: false
+#| echo: false
 
 vms$VE_COU <- "NO"
 vms$VE_REF <- vms$Radiokallesignal
@@ -317,9 +351,12 @@ eflalo[, grep("LE_KG_", colnames(eflalo))] <- apply(eflalo[, grep("LE_KG_", coln
 
 ```
 
-
 ### Checking the format
+
 ```{r}
+#| warning: false
+#| echo: false
+
 eflalo <- formatEflalo(eflalo)
 tacsat <- formatTacsat(vms)
 summarizeTacsat(tacsat)
@@ -327,12 +364,17 @@ summarizeEflalo(eflalo)
 ```
 
 ### Now merging the two datasets (had to modify the code as there was an issue)
+
 ```{r}
+#| warning: false
+#| echo: false
+
 source("Functions/mergeEflalo2Tacsat_modif.R")
 tacsatp <- mergeEflalo2Tacsat_modif(eflalo,vms)
 ```
 
 ### Some testing
+
 ```{r}
 #Copy the gear type from eflalo to tacsat using match.
 tacsatp$LE_GEAR <- eflalo$LE_GEAR[match(tacsatp$FT_REF,eflalo$FT_REF)]
@@ -342,3 +384,4 @@ subset(tacsatp,FT_REF == "LCLP-2023-1-8-19-11-347")
 subset(eflalo,FT_REF == "LCLP-2023-1-8-19-11-347")
 ```
 
+### Now we need to implement code to do some plotting
